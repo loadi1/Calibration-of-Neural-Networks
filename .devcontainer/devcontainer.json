@@ -14,5 +14,15 @@
   "workspaceFolder": "/workspace",
   "remoteUser": "root",
   // Быстрая проверка после сборки
-  "postCreateCommand": "python - <<'PY'\nimport torch, os; print('CUDA available:', torch.cuda.is_available()); PY"
+
+  // Абсолютные пути внутри WSL
+  "mounts": [
+    "source=/tmp/ssh-yRP2PAxLAQgP/agent.32362,target=/ssh-agent,type=bind",
+    "source=/root/.ssh,target=/root/.ssh,type=bind"
+  ],
+  "remoteEnv": {
+    "SSH_AUTH_SOCK": "/ssh-agent"
+  },
+  
+  "postCreateCommand": "python3 - <<'PY'\nimport torch, os; print('CUDA available:', torch.cuda.is_available()); PY"
 }
