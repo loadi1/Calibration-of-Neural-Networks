@@ -154,7 +154,7 @@ def fit(
 # ---------------------------------------------------------------------------
 
 def cli() -> None:
-    import otto  # local module with data loaders
+    import Data.otto as otto  # local module with data loaders
 
     parser = argparse.ArgumentParser(description="Train baseline MLP on Otto")
     parser.add_argument("--data", type=Path, default=Path("./data/otto"), help="Data directory")

@@ -5,7 +5,7 @@ This module contains methods for training models with different loss functions.
 import torch
 from torch.nn import functional as F
 from torch import nn
-from Utils.eval_utils import evaluate_dataset
+from src.evaluate import evaluate_dataset
 
 def train_single_epoch(args,
                        epoch,
@@ -73,16 +73,16 @@ def train_single_epoch(args,
                 100. * batch_idx / len(train_loader),
                 loss.item()))
         
-        if args.loss_function == "adafocal" and args.update_gamma_every == -1 and batch_idx == len(train_loader)-1:
-            print("Gamma updated after the end of epoch.")
-            (val_loss, val_confusion_matrix, val_acc, val_ece, val_bin_dict,
-            val_adaece, val_adabin_dict, val_mce, val_classwise_ece) = evaluate_dataset(model, val_loader, device, num_bins=args.num_bins, num_labels=num_labels)
-            loss_function.update_bin_stats(val_adabin_dict)
-        elif args.loss_function == "adafocal" and args.update_gamma_every > 0 and batch_idx > 0 and batch_idx % args.update_gamma_every == 0:
-            print("Gamma updated after batch:", batch_idx)
-            (val_loss, val_confusion_matrix, val_acc, val_ece, val_bin_dict,
-            val_adaece, val_adabin_dict, val_mce, val_classwise_ece) = evaluate_dataset(model, val_loader, device, num_bins=args.num_bins, num_labels=num_labels)
-            loss_function.update_bin_stats(val_adabin_dict)
+        # if args.loss_function == "adafocal" and args.update_gamma_every == -1 and batch_idx == len(train_loader)-1:
+        #     print("Gamma updated after the end of epoch.")
+        #     (val_loss, val_confusion_matrix, val_acc, val_ece, val_bin_dict,
+        #     val_adaece, val_adabin_dict, val_mce, val_classwise_ece) = evaluate_dataset(model, val_loader, device, num_bins=args.num_bins, num_labels=num_labels)
+        #     loss_function.update_bin_stats(val_adabin_dict)
+        # elif args.loss_function == "adafocal" and args.update_gamma_every > 0 and batch_idx > 0 and batch_idx % args.update_gamma_every == 0:
+        #     print("Gamma updated after batch:", batch_idx)
+        #     (val_loss, val_confusion_matrix, val_acc, val_ece, val_bin_dict,
+        #     val_adaece, val_adabin_dict, val_mce, val_classwise_ece) = evaluate_dataset(model, val_loader, device, num_bins=args.num_bins, num_labels=num_labels)
+        #     loss_function.update_bin_stats(val_adabin_dict)
 
         # Collect predictions, confidence values, and labels over the entire dataset
         predictions_list.extend(predictions.cpu().numpy().tolist())
@@ -151,16 +151,16 @@ def train_single_epoch_warmup(args,
                 100. * batch_idx / len(train_loader),
                 loss.item()))
         
-        if args.loss_function == "adafocal" and args.update_gamma_every == -1 and batch_idx == len(train_loader)-1:
-            print("Gamma updated after the end of epoch.")
-            (val_loss, val_confusion_matrix, val_acc, val_ece, val_bin_dict,
-            val_adaece, val_adabin_dict, val_mce, val_classwise_ece) = evaluate_dataset(model, val_loader, device, num_bins=args.num_bins, num_labels=num_labels)
-            loss_function.update_bin_stats(val_adabin_dict)
-        elif args.loss_function == "adafocal" and args.update_gamma_every > 0 and batch_idx > 0 and batch_idx % args.update_gamma_every == 0:
-            print("Gamma updated after batch:", batch_idx)
-            (val_loss, val_confusion_matrix, val_acc, val_ece, val_bin_dict,
-            val_adaece, val_adabin_dict, val_mce, val_classwise_ece) = evaluate_dataset(model, val_loader, device, num_bins=args.num_bins, num_labels=num_labels)
-            loss_function.update_bin_stats(val_adabin_dict)
+        # if args.loss == "adafocal" and args.update_gamma_every == -1 and batch_idx == len(train_loader)-1:
+        #     print("Gamma updated after the end of epoch.")
+        #     (val_loss, val_confusion_matrix, val_acc, val_ece, val_bin_dict,
+        #     val_adaece, val_adabin_dict, val_mce, val_classwise_ece) = evaluate_dataset(model, val_loader, device, num_bins=args.num_bins, num_labels=num_labels)
+        #     loss_function.update_bin_stats(val_adabin_dict)
+        # elif args.loss == "adafocal" and args.update_gamma_every > 0 and batch_idx > 0 and batch_idx % args.update_gamma_every == 0:
+        #     print("Gamma updated after batch:", batch_idx)
+        #     (val_loss, val_confusion_matrix, val_acc, val_ece, val_bin_dict,
+        #     val_adaece, val_adabin_dict, val_mce, val_classwise_ece) = evaluate_dataset(model, val_loader, device, num_bins=args.num_bins, num_labels=num_labels)
+        #     loss_function.update_bin_stats(val_adabin_dict)
         
         # Collect predictions, confidence values, and labels over the entire dataset
         predictions_list.extend(predictions.cpu().numpy().tolist())

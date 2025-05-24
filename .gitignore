@@ -175,3 +175,4 @@ cython_debug/
 
 data
 .kaggle/
+kaggle.json
