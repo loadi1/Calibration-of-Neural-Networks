@@ -1,4 +1,5 @@
 import argparse, os, torch, numpy as np
+import sys, os; sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from Data import cifar10, cifar100, otto
 from Net.resnet import ResNet50Wrapper
 from Net.mlp import OttoMLP
@@ -51,7 +52,7 @@ def main():
     if args.method == "temperature":
         scaler = TemperatureScaler()
         scaler.fit(val_logits, val_labels)
-        test_logits_cal = scaler(test_logits.cuda()).cpu()
+        test_logits_cal = scaler(test_logits.cuda()).detach().cpu()
         test_probs = torch.softmax(test_logits_cal, dim=1).numpy()
     elif args.method == "platt":
         pipe = platt_scale(val_logits.numpy(), val_labels.numpy())

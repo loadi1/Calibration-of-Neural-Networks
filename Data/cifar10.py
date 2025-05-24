@@ -1,38 +1,25 @@
-# cifar10.py
-# Taked from https://doi.org/10.48550/arXiv.2503.22725
-"""
-Create train, valid, test iterators for CIFAR-10.
-Train set size: 45000
-Val set size: 5000
-Test set size: 10000
-"""
-
-import torch
-import numpy as np
-
-from torchvision import datasets
-from torchvision import transforms
-from torch.utils.data.sampler import SubsetRandomSampler
-
-
 from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, random_split
 
+MEAN = (0.4914, 0.4822, 0.4465)
+STD = (0.2470, 0.2435, 0.2616)
 
-def get_cifar10_loaders(batch_size: int = 128, val_split: float = 0.1):
+def get_cifar10_loaders(batch_size: int = 128, val_split: float = 0.1, use_augmix=False):
     """Возвращает train/val/test DataLoader'ы для CIFAR‑10."""
     transform_train = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465),
-                             (0.2470, 0.2435, 0.2616)),
+        transforms.Normalize(MEAN, STD),
     ])
     transform_test = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Normalize((0.4914, 0.4822, 0.4465),
-                             (0.2470, 0.2435, 0.2616)),
+        transforms.Normalize(MEAN, STD),
     ])
+    
+    if use_augmix:
+        from Regularization.augmix import augmix_train_transform
+        transform_train = augmix_train_transform(MEAN, STD)
 
     train_full = datasets.CIFAR10(root="./data", train=True, download=True,
                                   transform=transform_train)

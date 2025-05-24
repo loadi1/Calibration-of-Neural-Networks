@@ -6,7 +6,7 @@ MEAN = (0.5071, 0.4865, 0.4409)
 STD = (0.2673, 0.2564, 0.2762)
 
 
-def get_cifar100_loaders(batch_size: int = 128, val_split: float = 0.1):
+def get_cifar100_loaders(batch_size: int = 128, val_split: float = 0.1, use_augmix=False):
     transform_train = transforms.Compose([
         transforms.RandomCrop(32, padding=4),
         transforms.RandomHorizontalFlip(),
@@ -17,6 +17,10 @@ def get_cifar100_loaders(batch_size: int = 128, val_split: float = 0.1):
         transforms.ToTensor(),
         transforms.Normalize(MEAN, STD),
     ])
+    
+    if use_augmix:
+        from Regularization.augmix import augmix_train_transform
+        transform_train = augmix_train_transform(MEAN, STD)
 
     train_full = datasets.CIFAR100(root="./data", train=True, download=True,
                                    transform=transform_train)
