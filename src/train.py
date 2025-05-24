@@ -38,6 +38,8 @@ def parse_args():
     p.add_argument("--mixup", type=float, default=0.0, help="alpha для MixUp; 0 = off")
     p.add_argument("--label_smoothing", type=float, default=0.0, help="α для label smoothing; 0 = off")
     p.add_argument("--augmix", action="store_true", help="Включить AugMix")
+    p.add_argument('--early_stop', type=int, default=0,
+               help='patience в эпохах; 0 = без ранней остановки')
     return p.parse_args()
 
 def log_writer(path, header):
@@ -83,6 +85,8 @@ def main():
     header = ["epoch", "train_loss", "val_loss", "val_acc", "val_ece"]
     log_file, logger = log_writer(log_path, header)
 
+    best_val_loss = float('inf'); best_epoch = -1; patience_cnt = 0
+    
     for epoch in range(start_epoch, args.epochs):
         model.train(); running_loss = 0.0; n_batch = 0
         pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
@@ -125,10 +129,21 @@ def main():
         logger.writerow([epoch, f"{train_loss_epoch:.6f}", f"{val_loss:.6f}", f"{val_acc:.4f}", f"{val_ece:.6f}"])
         log_file.flush()
 
-        # чекпойнт каждые 50 эпох
+        # чекпойнт каждые save_freq эпох
         if (epoch + 1) % args.save_freq == 0:
             save_checkpoint(model, optimizer, epoch, args.output)
-
+            
+        if args.early_stop > 0:
+            if val_loss + 1e-6 < best_val_loss:               # улучшение
+                best_val_loss = val_loss; best_epoch = epoch; patience_cnt = 0
+                save_checkpoint(model, optimizer, epoch, args.output, tag='best')
+            else:
+                patience_cnt += 1
+                if patience_cnt >= args.early_stop:
+                    print(f'Early stop on epoch {epoch} (no ECE improvement for {args.early_stop} epochs)')
+                    break
+            
+    save_checkpoint(model, optimizer, epoch, args.output, tag='last')
     log_file.close()
 
     model.eval(); corr = tot = 0; logits_all = []; labels_all = []
@@ -145,6 +160,7 @@ def main():
     ada_test = adaptive_ece(logits_all, labels_all)
     cls_test = classwise_ece(logits_all, labels_all)
     brier = brier_score(logits_all, labels_all)
+    
 
     # запись
     import pandas as pd
