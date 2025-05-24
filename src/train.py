@@ -6,7 +6,7 @@ from tqdm import tqdm
 from Data import cifar10, cifar100, otto
 from Net.resnet import ResNet50Wrapper
 from Net.mlp import OttoMLP
-# from Losses import FocalLoss, DualFocalLoss, BSCELossGra
+from Losses import FocalLoss, DualFocalLoss, BSCELossGra
 from Metrics.ece import *
 from Metrics.brier import *
 from src.utils import save_checkpoint, load_checkpoint
@@ -18,10 +18,10 @@ DATASETS = {"cifar10": cifar10.get_cifar10_loaders,
 MODELS = {"resnet50": lambda n: ResNet50Wrapper(n),
           "mlp": lambda n: OttoMLP(in_features=93, num_classes=n)}
 
-LOSSES = {"cross_entropy": nn.CrossEntropyLoss,}
-        #   "focal": FocalLoss,
-        #   "dual_focal": DualFocalLoss,
-        #   "bsce_gra": BSCELossGra}
+LOSSES = {"cross_entropy": nn.CrossEntropyLoss,
+          "focal": FocalLoss,
+          "dual_focal": DualFocalLoss,
+          "bsce_gra": BSCELossGra}
 
 
 def parse_args():
