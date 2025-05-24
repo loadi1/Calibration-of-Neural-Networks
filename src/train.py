@@ -1,177 +1,137 @@
-'''
-This module contains methods for training models with different loss functions.
-'''
+import argparse, os, csv, torch, torch.nn as nn
+from torch.optim import SGD
+from tqdm import tqdm
 
-import torch
-from torch.nn import functional as F
-from torch import nn
-from src.evaluate import evaluate_dataset
+from Data import cifar10, cifar100, otto
+from Net.resnet import ResNet50Wrapper
+from Net.mlp import OttoMLP
+from Losses import FocalLoss, DualFocalLoss, BSCELossGra
+from Metrics.ece import *
+from Metrics.brier import *
+from src.utils import save_checkpoint, load_checkpoint
 
-def train_single_epoch(args,
-                       epoch,
-                       model,
-                       train_loader,
-                       val_loader,
-                       optimizer,
-                       device,
-                       loss_function,
-                       num_labels,
-                       calibrator,
-                    ):
-    '''
-    Util method for training a model for a single epoch.
-    '''
-    log_interval = 10
-    model.train()
-    train_loss = 0
-    num_samples = 0
-    predictions_list = []
-    confidence_list = []
-    labels_list = []
-    for batch_idx, (data, labels) in enumerate(train_loader):
-        data = data.to(device)
-        labels = labels.to(device)
+DATASETS = {"cifar10": cifar10.get_cifar10_loaders,
+            "cifar100": cifar100.get_cifar100_loaders,
+            "otto": otto.get_otto_loaders}
 
-        optimizer.zero_grad()
+MODELS = {"resnet50": lambda n: ResNet50Wrapper(n),
+          "mlp": lambda n: OttoMLP(in_features=93, num_classes=n)}
 
-        logits = model(data)
-
-        if batch_idx == 0:
-            fulldataset_logits = logits
-        else:
-            fulldataset_logits = torch.cat((fulldataset_logits, logits), dim=0)
-
-        # Compute loss
-        if args.loss_function == "consistency":
-            calibrated_probability = calibrator.calibrate(logits)
-            loss = loss_function(logits, labels, calibrated_probability)
-        elif args.loss_function in ('mmce', 'mmce_gra', 'mmce_weighted'):
-            loss = (len(data) * loss_function(logits, labels))
-        elif args.loss_function == "ece_loss":
-            loss = loss_function(logits, labels, epoch)
-        else:
-            loss = loss_function(logits, labels)
-
-        # Compute confidence values
-        log_softmax = F.log_softmax(logits, dim=1)
-        log_confidence, predictions = torch.max(log_softmax, dim=1)
-        confidence = log_confidence.exp()  
-
-        if args.loss_mean:
-            loss = loss / len(data)
-
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 2)
-        train_loss += loss.item()
-        optimizer.step()
-        
-        num_samples += len(data)
-
-        if batch_idx % log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader) * len(data),
-                100. * batch_idx / len(train_loader),
-                loss.item()))
-        
-        # if args.loss_function == "adafocal" and args.update_gamma_every == -1 and batch_idx == len(train_loader)-1:
-        #     print("Gamma updated after the end of epoch.")
-        #     (val_loss, val_confusion_matrix, val_acc, val_ece, val_bin_dict,
-        #     val_adaece, val_adabin_dict, val_mce, val_classwise_ece) = evaluate_dataset(model, val_loader, device, num_bins=args.num_bins, num_labels=num_labels)
-        #     loss_function.update_bin_stats(val_adabin_dict)
-        # elif args.loss_function == "adafocal" and args.update_gamma_every > 0 and batch_idx > 0 and batch_idx % args.update_gamma_every == 0:
-        #     print("Gamma updated after batch:", batch_idx)
-        #     (val_loss, val_confusion_matrix, val_acc, val_ece, val_bin_dict,
-        #     val_adaece, val_adabin_dict, val_mce, val_classwise_ece) = evaluate_dataset(model, val_loader, device, num_bins=args.num_bins, num_labels=num_labels)
-        #     loss_function.update_bin_stats(val_adabin_dict)
-
-        # Collect predictions, confidence values, and labels over the entire dataset
-        predictions_list.extend(predictions.cpu().numpy().tolist())
-        confidence_list.extend(confidence.detach().cpu().numpy().tolist())
-        labels_list.extend(labels.cpu().numpy().tolist())
-            
-    train_loss = train_loss/num_samples
-    print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss))
-    return train_loss, loss_function, labels_list, fulldataset_logits, predictions_list, confidence_list
+LOSSES = {"cross_entropy": nn.CrossEntropyLoss,
+          "focal": FocalLoss,
+          "dual_focal": DualFocalLoss,
+          "bsce_gra": BSCELossGra}
 
 
-def train_single_epoch_warmup(args,
-                       epoch,
-                       model,
-                       train_loader,
-                       val_loader,
-                       optimizer,
-                       device,
-                       loss_function,
-                       num_labels,
-                    ):
-    '''
-    Util method for training a model for a single epoch.
-    '''
-    log_interval = 10
-    model.train()
-    train_loss = 0
-    num_samples = 0
-    predictions_list = []
-    confidence_list = []
-    labels_list = []
-    for batch_idx, (data, labels) in enumerate(train_loader):
-        data = data.to(device)
-        labels = labels.to(device)
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--dataset", required=True, choices=DATASETS)
+    p.add_argument("--model", required=True, choices=MODELS)
+    p.add_argument("--loss", default="cross_entropy", choices=LOSSES)
+    p.add_argument("--epochs", type=int, default=200)
+    p.add_argument("--batch_size", type=int, default=128)
+    p.add_argument("--lr", type=float, default=0.1)
+    p.add_argument("--resume", type=str, default=None)
+    p.add_argument("--output", type=str, default="./model")
+    return p.parse_args()
 
 
-        optimizer.zero_grad()
-
-        logits = model(data)
-
-        if batch_idx == 0:
-            fulldataset_logits = logits
-        else:
-            fulldataset_logits = torch.cat((fulldataset_logits, logits), dim=0)
-        
-        loss = F.cross_entropy(logits, labels, reduction='sum')
-
-        # Compute confidence values
-        log_softmax = F.log_softmax(logits, dim=1)
-        log_confidence, predictions = torch.max(log_softmax, dim=1)
-        confidence = log_confidence.exp()    
-
-        if args.loss_mean:
-            loss = loss / len(data)
-
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 2)
-        train_loss += loss.item()
-        optimizer.step()
-        
-        num_samples += len(data)
-
-        if batch_idx % log_interval == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader) * len(data),
-                100. * batch_idx / len(train_loader),
-                loss.item()))
-        
-        # if args.loss == "adafocal" and args.update_gamma_every == -1 and batch_idx == len(train_loader)-1:
-        #     print("Gamma updated after the end of epoch.")
-        #     (val_loss, val_confusion_matrix, val_acc, val_ece, val_bin_dict,
-        #     val_adaece, val_adabin_dict, val_mce, val_classwise_ece) = evaluate_dataset(model, val_loader, device, num_bins=args.num_bins, num_labels=num_labels)
-        #     loss_function.update_bin_stats(val_adabin_dict)
-        # elif args.loss == "adafocal" and args.update_gamma_every > 0 and batch_idx > 0 and batch_idx % args.update_gamma_every == 0:
-        #     print("Gamma updated after batch:", batch_idx)
-        #     (val_loss, val_confusion_matrix, val_acc, val_ece, val_bin_dict,
-        #     val_adaece, val_adabin_dict, val_mce, val_classwise_ece) = evaluate_dataset(model, val_loader, device, num_bins=args.num_bins, num_labels=num_labels)
-        #     loss_function.update_bin_stats(val_adabin_dict)
-        
-        # Collect predictions, confidence values, and labels over the entire dataset
-        predictions_list.extend(predictions.cpu().numpy().tolist())
-        confidence_list.extend(confidence.detach().cpu().numpy().tolist())
-        labels_list.extend(labels.cpu().numpy().tolist())
-            
-    train_loss = train_loss/num_samples
-    print('====> Epoch: {} Average loss: {:.4f}'.format(epoch, train_loss))
-    return train_loss, loss_function, labels_list, fulldataset_logits, predictions_list, confidence_list
+def log_writer(path, header):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    f_exists = os.path.isfile(path)
+    f = open(path, "a", newline="")
+    writer = csv.writer(f)
+    if not f_exists:
+        writer.writerow(header)
+    return f, writer
 
 
-def set_temperature(model):
-    temperature = 1.0
-    return temperature
+def main():
+    args = parse_args()
+    os.makedirs(args.output, exist_ok=True)
+
+    # loaders
+    train_loader, val_loader, test_loader = DATASETS[args.dataset](batch_size=args.batch_size)
+    num_classes = 100 if args.dataset == "cifar100" else 10 if args.dataset == "cifar10" else 9
+
+    # model & optimisation
+    model = MODELS[args.model](num_classes).cuda()
+    criterion = LOSSES[args.loss]()
+    optimizer = SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [150, 250], gamma=0.1)
+
+    start_epoch = 0
+    if args.resume:
+        model, optimizer, start_epoch = load_checkpoint(args.resume, model, optimizer)
+
+    # файл‑лог для динамики метрик
+    log_path = os.path.join(args.output, "history.csv")
+    header = ["epoch", "train_loss", "val_loss", "val_acc", "val_ece"]
+    log_file, logger = log_writer(log_path, header)
+
+    for epoch in range(start_epoch, args.epochs):
+        model.train(); running_loss = 0.0; n_batch = 0
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
+        for x, y in pbar:
+            x, y = x.cuda(), y.cuda()
+            optimizer.zero_grad(); out = model(x)
+            loss = criterion(out, y)
+            loss.backward(); optimizer.step()
+            running_loss += loss.item(); n_batch += 1
+            pbar.set_postfix({"loss": running_loss / n_batch})
+        scheduler.step()
+        train_loss_epoch = running_loss / n_batch
+
+        # validation
+        model.eval(); corr = tot = 0; logits_all = []; labels_all = []; val_loss = 0.0; v_batches = 0
+        with torch.no_grad():
+            for x, y in val_loader:
+                x, y = x.cuda(), y.cuda(); logits = model(x)
+                loss_val = criterion(logits, y).item()
+                val_loss += loss_val; v_batches += 1
+                preds = logits.argmax(1); corr += (preds == y).sum().item(); tot += y.size(0)
+                logits_all.append(logits.cpu()); labels_all.append(y.cpu())
+        val_loss /= v_batches
+        val_acc = corr / tot * 100
+        val_ece = expected_calibration_error(torch.cat(logits_all), torch.cat(labels_all))
+
+        # вывод и логирование
+        print(f"Epoch {epoch}: train_loss={train_loss_epoch:.4f} | val_loss={val_loss:.4f} | "
+              f"val_acc={val_acc:.2f}% | val_ECE={val_ece:.4f}")
+        logger.writerow([epoch, f"{train_loss_epoch:.6f}", f"{val_loss:.6f}", f"{val_acc:.4f}", f"{val_ece:.6f}"])
+        log_file.flush()
+
+        # чекпойнт каждые 50 эпох
+        if (epoch + 1) % 50 == 0:
+            save_checkpoint(model, optimizer, epoch, args.output)
+
+    log_file.close()
+    # TODO: тестовые метрики и запись в results.csv как ранее
+    model.eval(); corr = tot = 0; logits_all = []; labels_all = []
+    with torch.no_grad():
+        for x, y in test_loader:
+            x, y = x.cuda(), y.cuda()
+            logits = model(x)
+            preds = logits.argmax(1)
+            corr += (preds == y).sum().item(); tot += y.size(0)
+            logits_all.append(logits.cpu()); labels_all.append(y.cpu())
+    acc = corr / tot * 100
+    logits_all = torch.cat(logits_all); labels_all = torch.cat(labels_all)
+    ece_test = expected_calibration_error(logits_all, labels_all)
+    ada_test = adaptive_ece(logits_all, labels_all)
+    cls_test = classwise_ece(logits_all, labels_all)
+    brier = brier_score(logits_all, labels_all)
+
+    # запись
+    import pandas as pd
+    res_path = os.path.join(args.output, "results.csv")
+    row = pd.DataFrame([{"dataset": args.dataset, "model": args.model, "loss": args.loss,
+                         "accuracy": acc, "ece": ece_test, "adaece": ada_test,
+                         "classece": cls_test, "brier": brier}])
+    if os.path.exists(res_path):
+        row.to_csv(res_path, mode="a", header=False, index=False)
+    else:
+        row.to_csv(res_path, index=False)
+
+if __name__ == "__main__":
+    main()
