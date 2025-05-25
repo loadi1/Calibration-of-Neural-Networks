@@ -1,180 +1,160 @@
+# src/train.py  ─ единый скрипт обучения + история всех метрик
+import argparse, os, csv, json, torch, torch.nn as nn, pandas as pd
 import argparse, os, csv, torch, torch.nn as nn
 import sys, os; sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from torch.optim import SGD
 from tqdm import tqdm
+from pathlib import Path
 
+# ────────────────────────────────────────────────────────────────────────────
 from Data import cifar10, cifar100, otto
 from Net.resnet import ResNet50Wrapper
 from Net.mlp import OttoMLP
 from Losses import FocalLoss, DualFocalLoss, BSCELossGra
-from Metrics.ece import *
-from Metrics.brier import *
+from Metrics import (expected_calibration_error as ece,
+                     adaptive_ece, classwise_ece, brier_score)
+from Regularization.mixup import mixup_data, mixup_criterion
 from src.utils import save_checkpoint, load_checkpoint
+# ────────────────────────────────────────────────────────────────────────────
 
-DATASETS = {"cifar10": cifar10.get_cifar10_loaders,
-            "cifar100": cifar100.get_cifar100_loaders,
-            "otto": otto.get_otto_loaders}
+DATASETS = {
+    "cifar10":  cifar10.get_cifar10_loaders,
+    "cifar100": cifar100.get_cifar100_loaders,
+    "otto":     otto.get_otto_loaders,
+}
+LOSSES = {
+    "cross_entropy": nn.CrossEntropyLoss,
+    "focal":         FocalLoss,
+    "dual_focal":    DualFocalLoss,
+    "bsce_gra":      BSCELossGra,
+}
+MODELS = {
+    "resnet50": lambda c: ResNet50Wrapper(c),
+    "mlp":      lambda c, in_f=93: OttoMLP(in_features=in_f, num_classes=c),
+}
 
-MODELS = {"resnet50": lambda n: ResNet50Wrapper(n),
-          "mlp": lambda n: OttoMLP(in_features=93, num_classes=n)}
-
-LOSSES = {"cross_entropy": nn.CrossEntropyLoss,
-          "focal": FocalLoss,
-          "dual_focal": DualFocalLoss,
-          "bsce_gra": BSCELossGra}
-
-
-def parse_args():
+# ────────────────────────────────────────────────────────────────────────────
+def parse():
     p = argparse.ArgumentParser()
     p.add_argument("--dataset", required=True, choices=DATASETS)
-    p.add_argument("--model", required=True, choices=MODELS)
-    p.add_argument("--loss", default="cross_entropy", choices=LOSSES)
-    p.add_argument("--epochs", type=int, default=200)
+    p.add_argument("--model",   required=True, choices=MODELS)
+    p.add_argument("--loss",    default="cross_entropy", choices=LOSSES)
+    p.add_argument("--epochs",  type=int, default=200)
     p.add_argument("--batch_size", type=int, default=128)
     p.add_argument("--lr", type=float, default=0.1)
-    p.add_argument("--resume", type=str, default=None)
+    
+    p.add_argument("--mixup", type=float, default=0.0)
+    p.add_argument("--early_stop", type=int, default=0, help="patience; 0=off")
     p.add_argument("--output", type=str, default="./model")
+    p.add_argument("--resume", type=str, default=None)
     p.add_argument("--save_freq", type=int, default=20, help="Сколько эпох между чекпойнтами")
-    p.add_argument("--mixup", type=float, default=0.0, help="alpha для MixUp; 0 = off")
     p.add_argument("--label_smoothing", type=float, default=0.0, help="α для label smoothing; 0 = off")
     p.add_argument("--augmix", action="store_true", help="Включить AugMix")
-    p.add_argument('--early_stop', type=int, default=0,
-               help='patience в эпохах; 0 = без ранней остановки')
+
     return p.parse_args()
 
-def log_writer(path, header):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    f_exists = os.path.isfile(path)
-    f = open(path, "a", newline="")
-    writer = csv.writer(f)
-    if not f_exists:
-        writer.writerow(header)
-    return f, writer
-
-
+# ────────────────────────────────────────────────────────────────────────────
 def main():
-    args = parse_args()
-    os.makedirs(args.output, exist_ok=True)
+    args = parse()
+    out_dir = Path(args.output)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    # loaders
-    if args.augmix and args.dataset.startswith("cifar"):
-        train_loader, val_loader, test_loader = DATASETS[args.dataset](batch_size=args.batch_size, use_augmix=True)
+    # ─ dataloaders
+    if args.dataset == "otto":
+        train_loader, val_loader, test_loader = DATASETS[args.dataset](batch_size=args.batch_size)
+        feat_dim = 93
     else:
-        train_loader, val_loader, test_loader = DATASETS[args.dataset](batch_size=args.batch_size,)
-    
-    num_classes = 100 if args.dataset == "cifar100" else 10 if args.dataset == "cifar10" else 9
+        train_loader, val_loader, test_loader = DATASETS[args.dataset](batch_size=args.batch_size)
+        feat_dim = None
 
-    # model & optimisation
-    if args.dataset == 'otto':
-        model = OttoMLP(in_features=93, num_classes=num_classes).cuda()
+    # ─ model
+    num_classes = {"cifar10":10,"cifar100":100,"otto":9}[args.dataset]
+    if args.dataset == "otto":
+        model = MODELS[args.model](num_classes, in_f=feat_dim).cuda()
     else:
         model = MODELS[args.model](num_classes).cuda()
-    
-    if args.label_smoothing > 0 and args.loss == "cross_entropy":
+
+    # ─ loss
+    if args.label_smoothing>0 and args.loss=="cross_entropy":
         from Regularization.label_smoothing import CELossWithLabelSmoothing
         criterion = CELossWithLabelSmoothing(alpha=args.label_smoothing)
     else:
         criterion = LOSSES[args.loss]()
 
-    optimizer = SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, [150, 250], gamma=0.1)
+    # ─ optim
+    optim = SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    sched = torch.optim.lr_scheduler.MultiStepLR(optim,[150,250], gamma=0.1)
 
-    start_epoch = 0
+    # ─ resume
+    start_ep = 0
     if args.resume:
-        model, optimizer, start_epoch = load_checkpoint(args.resume, model, optimizer)
+        model, optim, start_ep = load_checkpoint(args.resume, model, optim)
 
-    # файл‑лог для динамики метрик
-    log_path = os.path.join(args.output, "history.csv")
-    header = ["epoch", "train_loss", "val_loss", "val_acc", "val_ece"]
-    log_file, logger = log_writer(log_path, header)
+    # ─ history csv
+    hist_path = out_dir/"history.csv"
+    if not hist_path.exists():
+        with hist_path.open("w",newline="") as f:
+            csv.writer(f).writerow(["epoch","train_loss","val_loss",
+                                    "val_acc","val_ece","val_adaece",
+                                    "val_classece","val_brier"])
 
-    best_val_loss = float('inf'); best_epoch = -1; patience_cnt = 0
-    
-    for epoch in range(start_epoch, args.epochs):
-        model.train(); running_loss = 0.0; n_batch = 0
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch}")
-        for x, y in pbar:
-            x, y = x.cuda(), y.cuda()
-            optimizer.zero_grad(); 
-            
-            if args.mixup > 0:
-                from Regularization.mixup import mixup_data, mixup_criterion
-                x, y_a, y_b, lam = mixup_data(x, y, alpha=args.mixup)
-                logits = model(x)
-                loss = mixup_criterion(criterion, logits, y_a, y_b, lam)
-            else:
-                logits = model(x)
-                loss = criterion(logits, y)
-            
-            
-            loss.backward(); optimizer.step()
-            running_loss += loss.item(); n_batch += 1
-            pbar.set_postfix({"loss": running_loss / n_batch})
-        scheduler.step()
-        train_loss_epoch = running_loss / n_batch
+    best_val_loss, patience = 1e9, 0
 
-        # validation
-        model.eval(); corr = tot = 0; logits_all = []; labels_all = []; val_loss = 0.0; v_batches = 0
+    # ─────────────────────────── training loop ────────────────────────────
+    for epoch in range(start_ep, args.epochs):
+        model.train(); running=0; n=0
+        pbar = tqdm(train_loader, desc=f"Ep{epoch}")
+        for x,y in pbar:
+            x,y = x.cuda(), y.cuda()
+            if args.mixup>0:
+                x,y_a,y_b,lam = mixup_data(x,y,alpha=args.mixup)
+            optim.zero_grad()
+            out = model(x)
+            loss = mixup_criterion(criterion,out,y_a,y_b,lam) if args.mixup>0 else criterion(out,y)
+            loss.backward(); optim.step()
+            running+=loss.item(); n+=1
+            pbar.set_postfix(loss=running/n)
+        sched.step()
+        train_loss = running/n
+
+        # ─ validation
+        model.eval(); corr=tot=0; logits_lst=[]; labels_lst=[]; vloss=0; vb=0
         with torch.no_grad():
-            for x, y in val_loader:
-                x, y = x.cuda(), y.cuda(); logits = model(x)
-                loss_val = criterion(logits, y).item()
-                val_loss += loss_val; v_batches += 1
-                preds = logits.argmax(1); corr += (preds == y).sum().item(); tot += y.size(0)
-                logits_all.append(logits.cpu()); labels_all.append(y.cpu())
-        val_loss /= v_batches
-        val_acc = corr / tot * 100
-        val_ece = expected_calibration_error(torch.cat(logits_all), torch.cat(labels_all))
+            for x,y in val_loader:
+                x,y = x.cuda(), y.cuda()
+                logits = model(x)
+                vloss += criterion(logits,y).item(); vb+=1
+                corr  += (logits.argmax(1)==y).sum().item(); tot+=y.size(0)
+                logits_lst.append(logits.cpu()); labels_lst.append(y.cpu())
+        val_loss = vloss/vb
+        logits_all = torch.cat(logits_lst); labels_all=torch.cat(labels_lst)
+        val_acc  = corr/tot*100
+        val_ECE    = ece(logits_all, labels_all)
+        val_ada  = adaptive_ece(logits_all, labels_all)
+        val_cls  = classwise_ece(logits_all, labels_all)
+        val_b    = brier_score(logits_all, labels_all)
 
-        # вывод и логирование
-        print(f"Epoch {epoch}: train_loss={train_loss_epoch:.4f} | val_loss={val_loss:.4f} | "
-              f"val_acc={val_acc:.2f}% | val_ECE={val_ece:.4f}")
-        logger.writerow([epoch, f"{train_loss_epoch:.6f}", f"{val_loss:.6f}", f"{val_acc:.4f}", f"{val_ece:.6f}"])
-        log_file.flush()
+        # ─ write history
+        with hist_path.open("a",newline="") as f:
+            csv.writer(f).writerow([epoch,train_loss,val_loss,
+                                    val_acc,val_ECE,val_ada.numpy(),val_cls.numpy(),val_b])
 
-        # чекпойнт каждые save_freq эпох
-        if (epoch + 1) % args.save_freq == 0:
-            save_checkpoint(model, optimizer, epoch, args.output)
-            
-        if args.early_stop > 0:
-            if val_loss + 1e-6 < best_val_loss:               # улучшение
-                best_val_loss = val_loss; best_epoch = epoch; patience_cnt = 0
-                save_checkpoint(model, optimizer, epoch, args.output, tag='best')
+        print(f"Epoch {epoch}: train_loss={train_loss:.4f} | val_loss={val_loss:.4f} | val_acc {val_acc:.2f} | val_ECE {val_ECE:.4f}")
+        # ─ early stop
+        if args.early_stop:
+            if val_loss < best_val_loss-1e-6:
+                best_val_loss, patience = val_loss, 0
+                save_checkpoint(model, optim, epoch, out_dir, tag="best")
             else:
-                patience_cnt += 1
-                if patience_cnt >= args.early_stop:
-                    print(f'Early stop on epoch {epoch} (no Val loss improvement for {args.early_stop} epochs)')
+                patience+=1
+                if patience>=args.early_stop:
+                    print(f"Early-stop at {epoch}")
                     break
-            
-    save_checkpoint(model, optimizer, epoch, args.output, tag='last')
-    log_file.close()
+        
+        if epoch % args.save_freq == 0:
+            save_checkpoint(model, optim, epoch, out_dir, tag="ckpt")  # step ckpt
 
-    model.eval(); corr = tot = 0; logits_all = []; labels_all = []
-    with torch.no_grad():
-        for x, y in test_loader:
-            x, y = x.cuda(), y.cuda()
-            logits = model(x)
-            preds = logits.argmax(1)
-            corr += (preds == y).sum().item(); tot += y.size(0)
-            logits_all.append(logits.cpu()); labels_all.append(y.cpu())
-    acc = corr / tot * 100
-    logits_all = torch.cat(logits_all); labels_all = torch.cat(labels_all)
-    ece_test = expected_calibration_error(logits_all, labels_all)
-    ada_test = adaptive_ece(logits_all, labels_all)
-    cls_test = classwise_ece(logits_all, labels_all)
-    brier = brier_score(logits_all, labels_all)
-    
-
-    # запись
-    import pandas as pd
-    res_path = os.path.join(args.output, "results.csv")
-    row = pd.DataFrame([{"dataset": args.dataset, "model": args.model, "loss": args.loss,
-                         "accuracy": acc, "ece": ece_test, "adaece": ada_test,
-                         "classece": cls_test, "brier": brier}])
-    if os.path.exists(res_path):
-        row.to_csv(res_path, mode="a", header=False, index=False)
-    else:
-        row.to_csv(res_path, index=False)
+    save_checkpoint(model, optim, epoch, out_dir, tag="final")
 
 if __name__ == "__main__":
     main()

@@ -1,8 +1,0 @@
-dataset,model,method,ece,adaece,classece,brier
-otto,mlp,temperature,0.014973245561122894,tensor(0.0164),tensor(0.6465),0.29502972960472107
-otto,mlp,platt,0.022589046508073807,"tensor(0.0247, dtype=torch.float64)","tensor(0.6436, dtype=torch.float64)",0.28731466031177766
-otto,mlp,isotonic,0.02241891622543335,tensor(0.0205),tensor(0.5464),0.29362374544143677
-otto,mlp,temperature,0.014973245561122894,tensor(0.0164),tensor(0.6465),0.29502972960472107
-otto,mlp,bbq,0.023630227893590927,"tensor(0.0195, dtype=torch.float64)","tensor(0.5367, dtype=torch.float64)",0.31647370662858026
-otto,mlp,isotonic,0.02241891622543335,tensor(0.0205),tensor(0.5464),0.29362374544143677
-otto,mlp,platt,0.022589046508073807,"tensor(0.0247, dtype=torch.float64)","tensor(0.6436, dtype=torch.float64)",0.28731466031177766

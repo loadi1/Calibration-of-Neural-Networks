@@ -1,95 +1,111 @@
-"""Запуск полного набора обучений + пост‑калибровок.
-Сценарий построен как очередь задач; при падении одной — пишет ошибку и идёт дальше.
-Логи суммируются в run_all.log; результаты собираются в results_master.csv и calib_master.csv.
+#!/usr/bin/env python3
 """
-import subprocess, itertools, json, os, time, logging, csv, sys, pathlib
+Автоматический перебор обучений и пост-калибровок.
+• one GPU, single-process; перезапуск безопасен.
+• Sentinel-файлы <method>.done не позволят повторно калибровать.
+• .out/.err файлов много? – складываем их в ./logs/.
+"""
+import subprocess, csv, sys, logging, pathlib, os
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent  # корень проекта
+ROOT   = pathlib.Path(__file__).resolve().parent.parent
 MODEL_DIR = ROOT / "model"
-RES_CSV = ROOT / "results_master.csv"
-CAL_CSV = ROOT / "calib_master.csv"
-LOG = ROOT / "run_all.log"
-
-logging.basicConfig(filename=LOG, level=logging.INFO,
+LOG_DIR   = ROOT / "logs"; LOG_DIR.mkdir(exist_ok=True)
+RES_CSV   = ROOT / "results_master.csv"
+CAL_CSV   = ROOT / "calib_master.csv"
+logging.basicConfig(filename=ROOT/"run_all.log",
+                    level=logging.INFO,
                     format="%(asctime)s %(levelname)s: %(message)s")
-print = lambda *a, **k: (logging.info(" ".join(map(str, a))), __builtins__.print(*a, **k))
+prt = lambda *a: (logging.info(" ".join(map(str,a))), print(*a, flush=True))
 
-DATASETS = [
-    ("cifar10", "resnet50", 10),
-    ("cifar100", "resnet50", 100),
-    ("otto", "mlp", 9),
-]
-LOSSES = ["cross_entropy", "focal", "dual_focal", "bsce_gra"]
-REGS = [  # (label_smoothing, mixup, augmix)
-    (0.0, 0.0, False),      # none
-    (0.1, 0.0, False),      # label smoothing
-    (0.0, 0.2, False),      # mixup
-    (0.0, 0.0, True),       # augmix
-]
-POST_METHODS = ["temperature", "platt", "isotonic", "bbq"]
+# ────────────────────────────────────────────────────────────────────────────
+DATASETS = [("cifar10","resnet50"),("cifar100","resnet50"),("otto","mlp")]
+LOSSES   = ["cross_entropy","focal","dual_focal","bsce_gra"]
+REGS     = [(0,0,False), (0.1,0,False), (0,0.2,False), (0,0,True)]  # ls,mix,aug
+POST_METHODS = ["temperature","platt","isotonic","bbq"]
 
-EPOCHS = 200
-BATCH = 128
-PATIENCE = 10
-
-def find_ckpt(out_dir):
-    for pattern in ('best.pth', 'final.pth', 'ckpt_*.pth'):
-        files = sorted(out_dir.glob(pattern))
-        if files:
-            return files[-1]
-    return None
-
-def run_cmd(cmd, env=None):
-    print("RUN", " ".join(cmd))
-    try:
-        subprocess.check_call(cmd, env=env)
-    except subprocess.CalledProcessError as e:
-        logging.error(f"Command failed with code {e.returncode}: {' '.join(cmd)}")
-        
-        with open(RES_CSV, 'a', newline='') as f:
-            csv.writer(f).writerow([ds, mdl, loss, ls, mix, aug, 'ERROR', '', '', '', ''])
-
-
+EPOCHS=200; BATCH=128; PATIENCE=10; NEED_VALIDATE=True
+# ────────────────────────────────────────────────────────────────────────────
 def ensure_csv(path, header):
     if not path.exists():
-        with open(path, "w", newline="") as f:
+        with open(path,"w",newline="") as f:
             csv.writer(f).writerow(header)
 
-def main():
-    ensure_csv(RES_CSV, ["dataset", "model", "loss", "ls", "mixup", "augmix",
-                         "accuracy", "ece", "adaece", "classece", "brier"])
-    ensure_csv(CAL_CSV, ["dataset", "model", "method", "loss", "ls", "mixup", "augmix",
-                         "ece", "adaece", "classece", "brier"])
+def run(cmd, tag):
+    """stdout/err → logs/<tag>.out|err   ; returncode"""
+    out = open(LOG_DIR/f"{tag}.out","w")
+    err = open(LOG_DIR/f"{tag}.err","w")
+    prt("RUN", *cmd)
+    res = subprocess.run(cmd, stdout=out, stderr=err)
+    if res.returncode: prt("FAIL", tag, res.returncode)
+    return res.returncode
 
-    for ds, mdl, _ in DATASETS:
+def find_ckpt(d: pathlib.Path):
+    for pat in ("best.pth","final.pth","ckpt_*.pth"):
+        f = next((p for p in d.glob(pat)), None)
+        if f: return f
+    return None
+
+def sentinel(dir_: pathlib.Path, method: str): return dir_/f"{method}.done"
+
+# ────────────────────────────────────────────────────────────────────────────
+def main():
+    ensure_csv(RES_CSV, ["dataset","model","loss","ls","mixup","augmix",
+                         "accuracy","ece","adaece","classece","brier"])
+    ensure_csv(CAL_CSV, ["dataset","model","method","loss","ls","mixup","augmix",
+                        "accuracy","ece","adaece","classece","brier"])
+
+    for ds, mdl in DATASETS:
         for loss in LOSSES:
             for ls, mix, aug in REGS:
                 tag = f"{ds}_{mdl}_{loss}_ls{ls}_mx{mix}_{'aug' if aug else 'noaug'}"
-                out_dir = MODEL_DIR / tag
-                if (out_dir / f"ckpt_final.pth").exists():
-                    print("Skip existing", tag); continue
-                cmd = [sys.executable, "-m", "src.train",
-                       "--dataset", ds, "--model", mdl,
-                       "--loss", loss,
-                       "--epochs", str(EPOCHS),
-                       "--batch_size", str(BATCH),
-                       "--output", str(out_dir)]
-                cmd += ['--early_stop', str(PATIENCE)]
-                if ls > 0: cmd += ["--label_smoothing", str(ls)]
-                if mix > 0: cmd += ["--mixup", str(mix)]
-                if aug: cmd += ["--augmix"]
-                run_cmd(cmd)
+                out_dir = MODEL_DIR/tag
+                ckpt = find_ckpt(out_dir)
 
-                # пост‑калибровки ТОЛЬКО для базового CrossEntropy без регов
-                if loss == "cross_entropy" and ls == 0 and mix == 0 and not aug:
+                # ---------- обучение (если нет ckpt) ----------
+                if ckpt is None:
+                    cmd = [sys.executable,"-m","src.train",
+                           "--dataset",ds,"--model",mdl,
+                           "--loss",loss,"--epochs",str(EPOCHS),
+                           "--batch_size",str(BATCH),
+                           "--output",str(out_dir),
+                           "--early_stop",str(PATIENCE)]
+                    if ls:  cmd += ["--label_smoothing",str(ls)]
+                    if mix: cmd += ["--mixup",str(mix)]
+                    if aug: cmd += ["--augmix"]
+                    if run(cmd,tag):        # ошибка обучения
+                        with open(RES_CSV,"a",newline="") as f:
+                            csv.writer(f).writerow([ds,mdl,loss,ls,mix,aug,
+                                                    "ERROR","","","",""])
+                        continue
                     ckpt = find_ckpt(out_dir)
+
+                # ---------- пост-калибровки для всех моделей без MixUp/AugMix
+                if True: #mix==0 and not aug:
                     for method in POST_METHODS:
-                        cmd_c = [sys.executable, "src/calibrate.py",
-                                 "--ckpt", str(ckpt),
-                                 "--method", method,
-                                 "--dataset", ds, "--model", mdl,
-                                 "--output", str(CAL_CSV)]
-                        run_cmd(cmd_c)
+                        if sentinel(out_dir,method).exists(): continue
+                        tag_cal = f"{tag}_{method}"
+                        cmdc = [sys.executable,"src.calibrate.py",
+                                "--ckpt",str(ckpt),
+                                "--method",method,
+                                "--dataset",ds,"--model",mdl,
+                                "--loss",loss,"--ls",str(ls),
+                                "--mixup",str(mix),
+                                *(["--augmix"] if aug else []),
+                                "--output",str(CAL_CSV)]
+                        if run(cmdc, tag_cal)==0:
+                            sentinel(out_dir,method).touch()
+                        else:
+                            with open(CAL_CSV,"a",newline="") as f:
+                                csv.writer(f).writerow([ds,mdl,method,loss,ls,mix,aug,
+                                                        "ERROR","","",""])
+                                
+                if NEED_VALIDATE:               
+                    cmd_val = [sys.executable, "src/validate.py",
+                            "--ckpt", str(ckpt),
+                            "--dataset", ds, "--model", mdl,
+                            "--loss", loss, "--ls", str(ls),
+                            "--mixup", str(mix), *(["--augmix"] if aug else [])]
+                    run(cmd_val, f"{tag}_val")
 
 if __name__ == "__main__":
     main()

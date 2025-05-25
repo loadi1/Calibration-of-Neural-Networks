@@ -1,84 +1,136 @@
-import argparse, os, torch, numpy as np
+#!/usr/bin/env python3
+"""
+calibrate.py  –  применяет пост-калибровку (Temperature / Platt / Isotonic / BBQ)
+к уже обученному чекпойнту и пишет метрики в общий CSV.
+
+Пример:
+python src/calibrate.py \
+  --ckpt model/cifar10_resnet50_ce_ls0.0_mx0.0_noaug/best.pth \
+  --method temperature \
+  --dataset cifar10 --model resnet50 \
+  --loss cross_entropy --ls 0.0 --mixup 0.0 \
+  --output calib_master.csv
+"""
+import argparse, pathlib, csv, torch, numpy as np, pandas as pd
+from pathlib import Path
+import argparse, os, csv, torch, torch.nn as nn
 import sys, os; sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from Calibration.temperature import TemperatureScaler
+from Calibration.platt        import platt_scale
+from Calibration.isotonic     import isotonic_calibrate, apply_isotonic
+from Calibration.bbq          import bbq_calibrate
+from Metrics import (expected_calibration_error as ece,
+                     adaptive_ece, classwise_ece, brier_score)
+
+# ────────────────────────────────────────────────────────────────────
 from Data import cifar10, cifar100, otto
 from Net.resnet import ResNet50Wrapper
-from Net.mlp import OttoMLP
-from Metrics import expected_calibration_error as ece, adaptive_ece, classwise_ece, brier_score
-from Calibration.temperature import TemperatureScaler
-from Calibration.platt import platt_scale
-from Calibration.isotonic import isotonic_calibrate, apply_isotonic
-from Calibration.bbq import bbq_calibrate
+from Net.mlp     import OttoMLP
+# ────────────────────────────────────────────────────────────────────
 
-DATASETS = {"cifar10": cifar10.get_cifar10_loaders,
-            "cifar100": cifar100.get_cifar100_loaders,
-            "otto": otto.get_otto_loaders}
+DATASETS = {
+    "cifar10":  cifar10.get_cifar10_loaders,
+    "cifar100": cifar100.get_cifar100_loaders,
+    "otto":     otto.get_otto_loaders,
+}
+MODELS = {
+    "resnet50": lambda c: ResNet50Wrapper(c),
+    "mlp":      lambda c, in_f=93: OttoMLP(in_features=in_f, num_classes=c),
+}
+CAL_METHODS = ["temperature","platt","isotonic","bbq"]
 
-MODELS = {"resnet50": lambda n: ResNet50Wrapper(n),
-          "mlp": lambda n: OttoMLP(in_features=93, num_classes=n)}
-
-
-def parse_args():
+# ────────────────────────────────────────────────────────────────────
+def parse():
     p = argparse.ArgumentParser()
-    p.add_argument("--ckpt", required=True, help="Путь к модели .pth")
-    p.add_argument("--method", required=True, choices=["temperature", "platt", "isotonic", "bbq"])
+    p.add_argument("--ckpt", required=True, help="путь к .pth чекпойнту")
+    p.add_argument("--method", required=True, choices=CAL_METHODS)
     p.add_argument("--dataset", required=True, choices=DATASETS)
-    p.add_argument("--model", required=True, choices=MODELS)
+    p.add_argument("--model",   required=True, choices=MODELS)
+    p.add_argument("--loss",    required=True)          # чтобы писать в CSV
+    p.add_argument("--ls",      type=float, default=0.0)
+    p.add_argument("--mixup",   type=float, default=0.0)
+    p.add_argument("--augmix",  action="store_true")
     p.add_argument("--batch_size", type=int, default=256)
-    p.add_argument("--output", type=str, default="./calib_results.csv")
+    p.add_argument("--output", default="calib_master.csv")
     return p.parse_args()
 
-
+# ────────────────────────────────────────────────────────────────────
+@torch.inference_mode()
 def collect_logits(model, loader):
-    model.eval(); logits_list = []; labels_list = []
-    with torch.no_grad():
-        for x, y in loader:
-            x = x.cuda(); logits = model(x).cpu()
-            logits_list.append(logits); labels_list.append(y)
-    return torch.cat(logits_list), torch.cat(labels_list)
-
+    logits, labels = [], []
+    for x,y in loader:
+        x = x.cuda(); out = model(x).cpu()
+        logits.append(out); labels.append(y)
+    return torch.cat(logits), torch.cat(labels)
 
 def main():
-    args = parse_args()
+    args = parse()
+    out_csv = Path(args.output)
+
     # loaders
-    train_loader, val_loader, test_loader = DATASETS[args.dataset](batch_size=args.batch_size)
-    num_classes = 100 if args.dataset == "cifar100" else 10 if args.dataset == "cifar10" else 9
-    model = MODELS[args.model](num_classes).cuda().eval()
-    model.load_state_dict(torch.load(args.ckpt, map_location="cpu")["model"])
+    if args.dataset == "otto":
+        tr, val, test = DATASETS[args.dataset](batch_size=args.batch_size)
+        feat_dim = 93
+    else:
+        tr, val, test = DATASETS[args.dataset](batch_size=args.batch_size)
+        feat_dim = None
 
-    # собираем логиты
-    val_logits, val_labels = collect_logits(model, val_loader)
-    test_logits, test_labels = collect_logits(model, test_loader)
+    num_cls = {"cifar10":10,"cifar100":100,"otto":9}[args.dataset]
+    model = ( MODELS[args.model](num_cls, in_f=feat_dim)
+              if args.dataset=="otto" else MODELS[args.model](num_cls) ).cuda().eval()
+    ckpt = torch.load(args.ckpt, map_location="cpu")
+    model.load_state_dict(ckpt["model"])
 
+    # собираем logits
+    val_logits,  val_labels  = collect_logits(model, val)
+    test_logits, test_labels = collect_logits(model, test)
+
+    # numpy версии
+    val_np  = val_logits.detach().cpu().numpy()
+    test_np = test_logits.detach().cpu().numpy()
+    y_val   = val_labels.detach().cpu().numpy()
+    y_test  = test_labels.detach().cpu().numpy()
+
+    # ─── выбираем метод калибровки ────────────────────────────────
     if args.method == "temperature":
-        scaler = TemperatureScaler()
+        scaler = TemperatureScaler().cuda()
         scaler.fit(val_logits, val_labels)
         test_logits_cal = scaler(test_logits.cuda()).detach().cpu()
-        test_probs = torch.softmax(test_logits_cal, dim=1).numpy()
+        probs_post = torch.softmax(test_logits_cal,1).numpy()
     elif args.method == "platt":
-        pipe = platt_scale(val_logits.numpy(), val_labels.numpy())
-        test_probs = pipe.predict_proba(test_logits.numpy())
+        pipe = platt_scale(val_np, y_val)
+        probs_post = pipe.predict_proba(test_np)
     elif args.method == "isotonic":
-        calibrators = isotonic_calibrate(torch.softmax(val_logits,1).numpy(), val_labels.numpy())
-        test_probs = apply_isotonic(calibrators, torch.softmax(test_logits,1).numpy())
-    else:  # bbq
-        bbq = bbq_calibrate(val_logits.numpy(), val_labels.numpy())
-        test_probs = bbq.predict_proba(test_logits.numpy())
+        calibs = isotonic_calibrate(torch.softmax(val_logits,1).numpy(), y_val)
+        probs_post = apply_isotonic(calibs, torch.softmax(test_logits,1).numpy())
+    else:  # BBQ
+        bbq = bbq_calibrate(val_np, y_val)
+        probs_post = bbq.predict_proba(test_np)
 
-    # метрики
-    test_logits_post = torch.from_numpy(np.log(test_probs + 1e-12))  # для ECE удобнее логиты → softmax даст probs_postс ≈ probs
-    ece_val = ece(test_logits_post, test_labels)
-    ada_val = adaptive_ece(test_logits_post, test_labels)
-    cls_val = classwise_ece(test_logits_post, test_labels)
-    brier_val = brier_score(test_logits_post, test_labels)
+    # back to torch logits to reuse metric fns
+    logits_post = torch.from_numpy(np.log(probs_post + 1e-12))
 
-    import pandas as pd
-    row = pd.DataFrame([[args.dataset, args.model, args.method, ece_val, ada_val, cls_val, brier_val]],
-                       columns=["dataset", "model", "method", "ece", "adaece", "classece", "brier"])
-    if os.path.exists(args.output):
-        row.to_csv(args.output, mode="a", header=False, index=False)
-    else:
-        row.to_csv(args.output, index=False)
-    print(row)
+    # ─── метрики ──────────────────────────────────────────────────
+    pred_post = probs_post.argmax(1)
+    acc_post  = (pred_post == y_test).mean()
+    ece_v   = ece(logits_post, test_labels)
+    ada_v   = adaptive_ece(logits_post, test_labels).numpy()
+    cls_v   = classwise_ece(logits_post, test_labels).numpy()
+    brier_v = brier_score(logits_post, test_labels)
+
+    # ─── пишем строку ─────────────────────────────────────────────
+    header = ["dataset","model","method","loss","ls","mixup","augmix",
+            "accuracy","ece","adaece","classece","brier"]
+    row = [args.dataset, args.model, args.method,
+           args.loss, args.ls, args.mixup, args.augmix,
+           acc_post,ece_v, ada_v, cls_v, brier_v]
+
+    if not out_csv.exists():
+        with out_csv.open("w",newline="") as f: csv.writer(f).writerow(header)
+    with out_csv.open("a",newline="") as f: csv.writer(f).writerow(row)
+
+    print(pd.Series(row, index=header))
 
 if __name__ == "__main__":
     main()
