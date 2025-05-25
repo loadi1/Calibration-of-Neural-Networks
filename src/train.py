@@ -34,7 +34,7 @@ def parse_args():
     p.add_argument("--lr", type=float, default=0.1)
     p.add_argument("--resume", type=str, default=None)
     p.add_argument("--output", type=str, default="./model")
-    p.add_argument("--save_freq", type=int, default=50, help="Сколько эпох между чекпойнтами")
+    p.add_argument("--save_freq", type=int, default=20, help="Сколько эпох между чекпойнтами")
     p.add_argument("--mixup", type=float, default=0.0, help="alpha для MixUp; 0 = off")
     p.add_argument("--label_smoothing", type=float, default=0.0, help="α для label smoothing; 0 = off")
     p.add_argument("--augmix", action="store_true", help="Включить AugMix")
@@ -65,7 +65,10 @@ def main():
     num_classes = 100 if args.dataset == "cifar100" else 10 if args.dataset == "cifar10" else 9
 
     # model & optimisation
-    model = MODELS[args.model](num_classes).cuda()
+    if args.dataset == 'otto':
+        model = OttoMLP(in_features=93, num_classes=num_classes).cuda()
+    else:
+        model = MODELS[args.model](num_classes).cuda()
     
     if args.label_smoothing > 0 and args.loss == "cross_entropy":
         from Regularization.label_smoothing import CELossWithLabelSmoothing
@@ -140,7 +143,7 @@ def main():
             else:
                 patience_cnt += 1
                 if patience_cnt >= args.early_stop:
-                    print(f'Early stop on epoch {epoch} (no ECE improvement for {args.early_stop} epochs)')
+                    print(f'Early stop on epoch {epoch} (no Val loss improvement for {args.early_stop} epochs)')
                     break
             
     save_checkpoint(model, optimizer, epoch, args.output, tag='last')

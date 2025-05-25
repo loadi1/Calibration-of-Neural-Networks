@@ -32,6 +32,12 @@ EPOCHS = 200
 BATCH = 128
 PATIENCE = 10
 
+def find_ckpt(out_dir):
+    for pattern in ('best.pth', 'final.pth', 'ckpt_*.pth'):
+        files = sorted(out_dir.glob(pattern))
+        if files:
+            return files[-1]
+    return None
 
 def run_cmd(cmd, env=None):
     print("RUN", " ".join(cmd))
@@ -39,6 +45,9 @@ def run_cmd(cmd, env=None):
         subprocess.check_call(cmd, env=env)
     except subprocess.CalledProcessError as e:
         logging.error(f"Command failed with code {e.returncode}: {' '.join(cmd)}")
+        
+        with open(RES_CSV, 'a', newline='') as f:
+            csv.writer(f).writerow([ds, mdl, loss, ls, mix, aug, 'ERROR', '', '', '', ''])
 
 
 def ensure_csv(path, header):
@@ -57,7 +66,7 @@ def main():
             for ls, mix, aug in REGS:
                 tag = f"{ds}_{mdl}_{loss}_ls{ls}_mx{mix}_{'aug' if aug else 'noaug'}"
                 out_dir = MODEL_DIR / tag
-                if (out_dir / f"ckpt_{EPOCHS-1:03d}.pth").exists():
+                if (out_dir / f"ckpt_final.pth").exists():
                     print("Skip existing", tag); continue
                 cmd = [sys.executable, "-m", "src.train",
                        "--dataset", ds, "--model", mdl,
@@ -73,7 +82,7 @@ def main():
 
                 # пост‑калибровки ТОЛЬКО для базового CrossEntropy без регов
                 if loss == "cross_entropy" and ls == 0 and mix == 0 and not aug:
-                    ckpt = out_dir / f"ckpt_{EPOCHS-1:03d}.pth"
+                    ckpt = find_ckpt(out_dir)
                     for method in POST_METHODS:
                         cmd_c = [sys.executable, "src/calibrate.py",
                                  "--ckpt", str(ckpt),

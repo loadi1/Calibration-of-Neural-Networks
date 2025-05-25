@@ -7,10 +7,11 @@ import torch
 
 def _load_otto_csv(path: str):
     df = pd.read_csv(path)
+    drop_cols = [c for c in ('id', 'ID') if c in df.columns]
+    if drop_cols:
+        df = df.drop(columns=drop_cols)
+    
     X = df.drop(columns=["target"]).values.astype(np.float32)
-    #y_str = df["target"]  # строки вида "Class_1"
-    # print(y_str)
-    # print(y_str.dtype)
     y = df["target"].str.replace("Class_", "").astype(int).sub(1).astype(np.int64).values
     return X, y
 

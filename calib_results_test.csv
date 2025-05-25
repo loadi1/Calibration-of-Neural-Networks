@@ -1,2 +1,0 @@
-dataset,model,method,ece,adaece,classece,brier
-cifar10,resnet50,temperature,0.05678673833608627,tensor(0.0579),tensor(0.4145),0.6265311241149902

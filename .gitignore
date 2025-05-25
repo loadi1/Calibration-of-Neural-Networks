@@ -177,3 +177,4 @@ data
 *kaggle*
 kaggle.json
 *.pth
+*.csv
