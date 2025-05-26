@@ -23,7 +23,7 @@ LOSSES   = ["cross_entropy","focal","dual_focal","bsce_gra"]
 REGS     = [(0,0,False), (0.1,0,False), (0,0.2,False), (0,0,True)]  # ls,mix,aug
 POST_METHODS = ["temperature","platt","isotonic","bbq"]
 
-EPOCHS=200; BATCH=128; PATIENCE=10; NEED_VALIDATE=True
+EPOCHS=200; BATCH=128; PATIENCE=20; NEED_VALIDATE=True
 # ────────────────────────────────────────────────────────────────────────────
 def ensure_csv(path, header):
     if not path.exists():
@@ -84,7 +84,7 @@ def main():
                     for method in POST_METHODS:
                         if sentinel(out_dir,method).exists(): continue
                         tag_cal = f"{tag}_{method}"
-                        cmdc = [sys.executable,"src.calibrate.py",
+                        cmdc = [sys.executable,"src/calibrate.py",
                                 "--ckpt",str(ckpt),
                                 "--method",method,
                                 "--dataset",ds,"--model",mdl,

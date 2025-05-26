@@ -177,6 +177,6 @@ data
 *kaggle*
 kaggle.json
 *.pth
-
+*.tar.gz
 *.done
 logs
