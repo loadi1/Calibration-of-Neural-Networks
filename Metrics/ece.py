@@ -40,22 +40,48 @@ def adaptive_ece(logits: torch.Tensor, labels: torch.Tensor, n_bins: int = 15):
 
 
 def classwise_ece(logits: torch.Tensor, labels: torch.Tensor, n_bins: int = 15):
-    probs = _softmax_logits(logits)
-    num_classes = probs.size(1)
+    """
+    Classwise ECE: average over K binary‐ECEs, one per class.
+    """
+    probs = _softmax_logits(logits)       # (N, K)
+    N, K   = probs.shape
     ece_total = 0.0
-    for c in range(num_classes):
-        conf = probs[:, c]
-        mask = labels == c
-        conf_c = conf[mask]
-        if conf_c.numel() == 0:
+
+    # prepare bin edges once
+    device = logits.device
+    bins   = torch.linspace(0.0, 1.0, n_bins + 1, device=device)
+
+    # for each class, compute a binary ECE
+    for c in range(K):
+        p_c = probs[:, c]                 # confidences for class c
+        y_c = (labels == c).float()       # 1 if true label==c, else 0
+
+        # skip if class never appears
+        if y_c.sum().item() == 0:
             continue
-        bins = torch.linspace(0, 1, n_bins + 1, device=logits.device)
+
         ece_c = 0.0
+        # binning
         for i in range(n_bins):
-            m = (conf_c > bins[i]) & (conf_c <= bins[i + 1])
-            if m.any():
-                acc_bin = (conf_c[m].argmax(dim=0) == 0).float().mean()  # accuracy = 1 т.к. true label
-                conf_bin = conf_c[m].mean()
-                ece_c += (m.float().mean()) * (acc_bin - conf_bin).abs()
-        ece_total += ece_c / num_classes
-    return ece_total
+            # [bins[i], bins[i+1]) except include right edge for last bin
+            if i < n_bins - 1:
+                mask = (p_c >= bins[i]) & (p_c < bins[i+1])
+            else:
+                mask = (p_c >= bins[i]) & (p_c <= bins[i+1])
+
+            if mask.sum().item() == 0:
+                continue
+
+            # average predicted confidence in bin
+            conf_bin = p_c[mask].mean()
+            # fraction of true positives in bin
+            acc_bin  = y_c[mask].mean()
+            # weight by fraction of samples in bin
+            weight   = mask.float().mean()
+
+            ece_c += weight * torch.abs(acc_bin - conf_bin)
+
+        ece_total += ece_c
+
+    # average over K classes that actually appear
+    return (ece_total / K).item()

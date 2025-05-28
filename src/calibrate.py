@@ -116,7 +116,7 @@ def main():
     acc_post  = (pred_post == y_test).mean()
     ece_v   = ece(logits_post, test_labels)
     ada_v   = adaptive_ece(logits_post, test_labels).numpy()
-    cls_v   = classwise_ece(logits_post, test_labels).numpy()
+    cls_v   = classwise_ece(logits_post, test_labels)
     brier_v = brier_score(logits_post, test_labels)
 
     # ─── пишем строку ─────────────────────────────────────────────

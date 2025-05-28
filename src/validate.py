@@ -76,7 +76,7 @@ def main():
 
     ece_v   = ece(logits, labels)
     ada_v   = adaptive_ece(logits, labels).numpy()
-    cls_v   = classwise_ece(logits, labels).numpy()
+    cls_v   = classwise_ece(logits, labels)
     brier_v = brier_score(logits, labels)
 
     header = ["dataset","model","loss","ls","mixup","augmix",

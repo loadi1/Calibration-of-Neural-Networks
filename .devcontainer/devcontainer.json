@@ -1,28 +1,23 @@
 {
   "context": "..",
   "dockerFile": "../Dockerfile",
+  "runArgs": ["--gpus", "all", "-p", "8888:8888"],
 
-  // GPU пробуем только если он реально доступен
-  "runArgs": [ "--gpus", "all", "-p", "8888:8888" ],
-
-  // (необязательно) автоматически добавит в контейнер драйверы CUDA
-  "features": {
+  "features": {                      
     "ghcr.io/devcontainers/features/nvidia-cuda:1.2": {}
   },
 
   "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind",
   "workspaceFolder": "/workspace",
   "remoteUser": "root",
-  // Быстрая проверка после сборки
 
-  // Абсолютные пути внутри WSL
   "mounts": [
-    "source=/tmp/ssh-yRP2PAxLAQgP/agent.32362,target=/ssh-agent,type=bind",
+    "source=/tmp/ssh-TrhvWRunwRmH/agent.33307,target=/ssh-agent,type=bind",
     "source=/root/.ssh,target=/root/.ssh,type=bind"
   ],
   "remoteEnv": {
     "SSH_AUTH_SOCK": "/ssh-agent"
   },
-  
-  "postCreateCommand": "python3 - <<'PY'\nimport torch, os; print('CUDA available:', torch.cuda.is_available()); PY"
+
+  "postCreateCommand": "git config --global user.name 'Vladimir Dobrygin' && git config --global user.email 'vladimir@dobrygin.ru'"
 }

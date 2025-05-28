@@ -1,0 +1,42 @@
+
+        \begin{table}[htbp]
+        \centering
+        \scriptsize
+        \setlength{\tabcolsep}{4pt}
+        \caption{Calibration quality before and after post-hoc methods.}
+        \label{tab:calibration_summary}
+        \begin{tabular}{l l rrrr rrrr}
+\toprule
+ &  & \multicolumn{4}{r}{ece} & \multicolumn{4}{r}{adaece} \\
+ & calibrator & pre & TS & Platt & IR & pre & TS & Platt & IR \\
+dataset & method_name &  &  &  &  &  &  &  &  \\
+\midrule
+\multirow[t]{7}{*}{cifar10} & AugMix & 0.034 & \textbf{0.032} & 0.033 & 0.042 & 0.034 & \textbf{0.032} & 0.033 & 0.041 \\
+ & Bsce-Gra & 0.134 & 0.05 & \textbf{0.026} & 0.039 & 0.134 & 0.049 & \textbf{0.029} & 0.037 \\
+ & Cross Entropy Loss & \textbf{0.011} & 0.017 & 0.022 & 0.021 & \textbf{0.011} & 0.014 & 0.022 & 0.024 \\
+ & Dual Focal Loss & 0.192 & 0.055 & \textbf{0.017} & 0.036 & 0.192 & 0.055 & \textbf{0.015} & 0.039 \\
+ & Focal Loss & 0.113 & 0.055 & \textbf{0.014} & 0.025 & 0.113 & 0.053 & \textbf{0.018} & 0.033 \\
+ & Label Smoothing & 0.055 & \textbf{0.032} & 0.045 & 0.033 & 0.055 & \textbf{0.030} & 0.05 & 0.033 \\
+ & MixUp & 0.043 & 0.019 & 0.033 & \textbf{0.010} & 0.043 & 0.018 & 0.031 & \textbf{0.012} \\
+\cline{1-10}
+\multirow[t]{7}{*}{cifar100} & AugMix & \textbf{0.057} & 0.062 & 0.185 & 0.08 & \textbf{0.057} & 0.062 & 0.185 & 0.08 \\
+ & Bsce-Gra & 0.035 & \textbf{0.025} & 0.157 & 0.047 & 0.035 & \textbf{0.022} & 0.157 & 0.046 \\
+ & Cross Entropy Loss & \textbf{0.075} & 0.081 & 0.194 & 0.098 & \textbf{0.075} & 0.081 & 0.194 & 0.097 \\
+ & Dual Focal Loss & 0.144 & 0.05 & 0.106 & \textbf{0.038} & 0.144 & 0.05 & 0.106 & \textbf{0.037} \\
+ & Focal Loss & \textbf{0.026} & 0.043 & 0.174 & 0.068 & \textbf{0.026} & 0.043 & 0.174 & 0.068 \\
+ & Label Smoothing & 0.131 & 0.1 & 0.065 & \textbf{0.021} & 0.131 & 0.1 & 0.065 & \textbf{0.025} \\
+ & MixUp & \textbf{0.010} & 0.029 & 0.177 & 0.062 & \textbf{0.011} & 0.029 & 0.177 & 0.062 \\
+\cline{1-10}
+\multirow[t]{7}{*}{otto} & AugMix & nan & nan & nan & nan & nan & nan & nan & nan \\
+ & Bsce-Gra & 0.161 & 0.076 & \textbf{0.028} & \textbf{0.028} & 0.161 & 0.075 & \textbf{0.029} & 0.032 \\
+ & Cross Entropy Loss & 0.022 & 0.022 & \textbf{0.018} & 0.026 & 0.02 & \textbf{0.015} & 0.016 & 0.023 \\
+ & Dual Focal Loss & 0.146 & 0.049 & \textbf{0.023} & 0.029 & 0.145 & 0.047 & 0.025 & \textbf{0.021} \\
+ & Focal Loss & 0.12 & 0.059 & 0.025 & \textbf{0.017} & 0.119 & 0.058 & 0.026 & \textbf{0.020} \\
+ & Label Smoothing & 0.091 & 0.03 & \textbf{0.023} & 0.031 & 0.089 & 0.028 & \textbf{0.025} & 0.026 \\
+ & MixUp & 0.032 & 0.027 & 0.028 & \textbf{0.020} & 0.032 & 0.022 & 0.025 & \textbf{0.018} \\
+\cline{1-10}
+\bottomrule
+\end{tabular}
+
+        \end{table}
+        
